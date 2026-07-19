@@ -1049,6 +1049,173 @@ local function toggleDesync()
 	end
 end
 
+-- ===== NoClip 機能 =====
+local noClipEnabled = false
+local noClipConnection
+
+local function setNoClip(enabled)
+	local char = player.Character
+	if not char then return end
+
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.CanCollide = not enabled
+		end
+	end
+end
+
+local function startNoClip()
+	setNoClip(true)
+	noClipConnection = player.CharacterAdded:Connect(function(char)
+		task.wait(0.5)
+		if noClipEnabled then
+			setNoClip(true)
+		end
+	end)
+end
+
+local function stopNoClip()
+	setNoClip(false)
+	if noClipConnection then
+		noClipConnection:Disconnect()
+		noClipConnection = nil
+	end
+end
+
+local function toggleNoClip()
+	noClipEnabled = not noClipEnabled
+	if noClipEnabled then
+		startNoClip()
+		showNotification("NoClip: ON", Color3.fromRGB(0, 255, 0))
+		print("NoClip: ON")
+	else
+		stopNoClip()
+		showNotification("NoClip: OFF", Color3.fromRGB(255, 0, 0))
+		print("NoClip: OFF")
+	end
+end
+
+-- ===== TP 機能 =====
+local tpEnabled = false
+local tpButton
+local spawnPosition = nil
+local lastPosition = nil
+local isAtSpawn = false
+
+local function equipFlyingCarpet()
+	local backpack = player:FindFirstChild("Backpack")
+	if not backpack then return end
+
+	local carpet = backpack:FindFirstChild("Flying Carpet")
+	if carpet then
+		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			humanoid:EquipTool(carpet)
+		end
+	end
+end
+
+local function teleportTo(position)
+	local char = player.Character
+	if not char then return end
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	hrp.CFrame = CFrame.new(position)
+	equipFlyingCarpet()
+end
+
+local function createTPButton()
+	if tpButton then return end
+
+	tpButton = Instance.new("TextButton")
+	tpButton.Name = "TPButton"
+	tpButton.Size = UDim2.new(0, 60, 0, 60)
+	tpButton.Position = UDim2.new(1, -70, 0.5, -30)
+	tpButton.BackgroundColor3 = Color3.fromRGB(10, 0, 0)
+	tpButton.BackgroundTransparency = 0.1
+	tpButton.BorderSizePixel = 0
+	tpButton.AutoButtonColor = false
+	tpButton.Text = "TP"
+	tpButton.TextColor3 = Color3.fromRGB(255, 60, 60)
+	tpButton.Font = Enum.Font.GothamBold
+	tpButton.TextSize = 18
+	tpButton.Parent = screenGui
+
+	local btnCorner = Instance.new("UICorner")
+	btnCorner.CornerRadius = UDim.new(0, 10)
+	btnCorner.Parent = tpButton
+
+	local btnBorder = Instance.new("UIStroke")
+	btnBorder.Color = Color3.fromRGB(180, 0, 0)
+	btnBorder.Thickness = 2
+	btnBorder.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	btnBorder.Parent = tpButton
+
+	tpButton.MouseButton1Click:Connect(function()
+		local char = player.Character
+		if not char then return end
+		local hrp = char:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+
+		if not spawnPosition then
+			spawnPosition = hrp.Position
+			showNotification("Spawn Position Saved", Color3.fromRGB(0, 255, 0))
+			return
+		end
+
+		if isAtSpawn then
+			if lastPosition then
+				teleportTo(lastPosition)
+				isAtSpawn = false
+				showNotification("TP: Back to last position", Color3.fromRGB(0, 255, 0))
+			end
+		else
+			lastPosition = hrp.Position
+			teleportTo(spawnPosition)
+			isAtSpawn = true
+			showNotification("TP: To spawn", Color3.fromRGB(0, 255, 0))
+		end
+	end)
+end
+
+local function removeTPButton()
+	if tpButton then
+		tpButton:Destroy()
+		tpButton = nil
+	end
+end
+
+local function toggleTP()
+	tpEnabled = not tpEnabled
+	if tpEnabled then
+		createTPButton()
+		showNotification("TP: ON", Color3.fromRGB(0, 255, 0))
+		print("TP: ON")
+	else
+		removeTPButton()
+		showNotification("TP: OFF", Color3.fromRGB(255, 0, 0))
+		print("TP: OFF")
+	end
+end
+
+-- スポーン位置を初期保存
+if player.Character then
+	local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		spawnPosition = hrp.Position
+	end
+end
+
+player.CharacterAdded:Connect(function(char)
+	task.wait(1)
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		spawnPosition = hrp.Position
+		isAtSpawn = true
+	end
+end)
+
 -- ===== 設定にトグルを追加 =====
 createToggleRow("Xray", toggleXRay, function() return xrayEnabled end)
 createToggleRow("Antibee", toggleAntibee, function() return antibeeEnabled end)
@@ -1058,5 +1225,7 @@ createToggleRow("Player ESP", togglePlayerESP, function() return playerESPEnable
 createToggleRow("ESP Timer", toggleESPTimer, function() return espTimerEnabled end)
 createToggleRow("Infinity Jump", toggleInfinityJump, function() return infinityJumpEnabled end)
 createToggleRow("Desync", toggleDesync, function() return desyncEnabled end)
+createToggleRow("NoClip", toggleNoClip, function() return noClipEnabled end)
+createToggleRow("TP", toggleTP, function() return tpEnabled end)
 
 print("masahub UI initialized!")
