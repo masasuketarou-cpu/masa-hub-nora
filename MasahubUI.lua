@@ -4,6 +4,7 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
+local Stats = game:GetService("Stats")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -1216,6 +1217,126 @@ player.CharacterAdded:Connect(function(char)
 	end
 end)
 
+-- ===== Auto Steal 機能 =====
+local autoStealEnabled = false
+local autoStealConnection = nil
+ local STEAL_RADIUS = 60
+local STEAL_DURATION = 1.4
+local isStealing = false
+local StealData = {}
+
+local function getHRP()
+	local c = player.Character
+	if c then return c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Torso") or c:FindFirstChild("UpperTorso") end
+	return nil
+end
+
+local function isMyPlotByName(pn)
+	local plots = workspace:FindFirstChild("Plots")
+	if not plots then return false end
+	local plot = plots:FindFirstChild(pn)
+	if not plot then return false end
+	local sign = plot:FindFirstChild("PlotSign")
+	if sign then
+		local yb = sign:FindFirstChild("YourBase")
+		if yb and yb:IsA("BillboardGui") then return yb.Enabled == true end
+	end
+	return false
+end
+
+local function findNearestPrompt()
+	local hrp = getHRP()
+	if not hrp then return nil end
+	local plots = workspace:FindFirstChild("Plots")
+	if not plots then return nil end
+	local nearest, dist = nil, math.huge
+	for _, plot in ipairs(plots:GetChildren()) do
+		if isMyPlotByName(plot.Name) then continue end
+		local pods = plot:FindFirstChild("AnimalPodiums")
+		if not pods then continue end
+		for _, pod in ipairs(pods:GetChildren()) do
+			local base = pod:FindFirstChild("Base")
+			if not base then continue end
+			local spawn = base:FindFirstChild("Spawn")
+			if not spawn then continue end
+			local d = (spawn.Position - hrp.Position).Magnitude
+			if d <= STEAL_RADIUS and d < dist then
+				local att = spawn:FindFirstChild("PromptAttachment")
+				if att then
+					for _, p in ipairs(att:GetChildren()) do
+						if p:IsA("ProximityPrompt") and p.ActionText and p.ActionText:find("Steal") then
+							nearest, dist = p, d
+						end
+					end
+				end
+			end
+		end
+	end
+	return nearest
+end
+
+local function executeSteal(prompt)
+	if isStealing then return end
+	if not StealData[prompt] then
+		StealData[prompt] = {hold = {}, trigger = {}, ready = true}
+		if getconnections then
+			for _, c in ipairs(getconnections(prompt.PromptButtonHoldBegan)) do
+				if c.Function then table.insert(StealData[prompt].hold, c.Function) end
+			end
+			for _, c in ipairs(getconnections(prompt.Triggered)) do
+				if c.Function then table.insert(StealData[prompt].trigger, c.Function) end
+			end
+		end
+	end
+	local data = StealData[prompt]
+	if not data.ready then return end
+	data.ready = false
+	isStealing = true
+	local startTime = tick()
+	task.spawn(function()
+		for _, f in ipairs(data.hold) do pcall(f) end
+		while tick() - startTime < STEAL_DURATION do
+			local elapsed = tick() - startTime
+			task.wait()
+		end
+		for _, f in ipairs(data.trigger) do pcall(f) end
+		task.wait(0.05)
+		data.ready = true
+		isStealing = false
+	end)
+end
+
+local function startAutoSteal()
+	if autoStealConnection then return end
+	autoStealConnection = RunService.Heartbeat:Connect(function()
+		if not autoStealEnabled then return end
+		if isStealing then return end
+		local success, prompt = pcall(findNearestPrompt)
+		if success and prompt then pcall(executeSteal, prompt) end
+	end)
+end
+
+local function stopAutoSteal()
+	if autoStealConnection then
+		autoStealConnection:Disconnect()
+		autoStealConnection = nil
+	end
+	isStealing = false
+end
+
+local function toggleAutoSteal()
+	autoStealEnabled = not autoStealEnabled
+	if autoStealEnabled then
+		startAutoSteal()
+		showNotification("Auto Steal: ON", Color3.fromRGB(0, 255, 0))
+		print("Auto Steal: ON")
+	else
+		stopAutoSteal()
+		showNotification("Auto Steal: OFF", Color3.fromRGB(255, 0, 0))
+		print("Auto Steal: OFF")
+	end
+end
+
 -- ===== 設定にトグルを追加 =====
 createToggleRow("Xray", toggleXRay, function() return xrayEnabled end)
 createToggleRow("Antibee", toggleAntibee, function() return antibeeEnabled end)
@@ -1227,5 +1348,6 @@ createToggleRow("Infinity Jump", toggleInfinityJump, function() return infinityJ
 createToggleRow("Desync", toggleDesync, function() return desyncEnabled end)
 createToggleRow("NoClip", toggleNoClip, function() return noClipEnabled end)
 createToggleRow("TP", toggleTP, function() return tpEnabled end)
+createToggleRow("Auto Steal", toggleAutoSteal, function() return autoStealEnabled end)
 
 print("masahub UI initialized!")
