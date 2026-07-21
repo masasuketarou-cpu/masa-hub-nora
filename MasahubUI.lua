@@ -1150,7 +1150,12 @@ local function teleportTo(position)
 	local hrp = char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return end
 
+	-- ステルスTP: 他のプレイヤーから見えないようにテレポート
+	local originalAnchored = hrp.Anchored
+	hrp.Anchored = true
 	hrp.CFrame = CFrame.new(position)
+	task.wait()
+	hrp.Anchored = originalAnchored
 	equipFlyingCarpet()
 end
 
@@ -1336,6 +1341,228 @@ player.CharacterAdded:Connect(function(char)
 	end
 end)
 
+-- ===== Base Protector / Auto Shooter 機能 =====
+local baseProtectorEnabled = false
+local autoShooterEnabled = false
+local autoShooterTarget = nil
+local autoShooterConnection = nil
+local laserCapeConnection = nil
+local autoShooterUI = nil
+
+local function createAutoShooterUI()
+	if autoShooterUI then return end
+
+	autoShooterUI = Instance.new("ScreenGui")
+	autoShooterUI.Name = "AutoShooterUI"
+	autoShooterUI.ResetOnSpawn = false
+	autoShooterUI.Parent = playerGui
+
+	local mainFrame = Instance.new("Frame")
+	mainFrame.Size = UDim2.new(0, 240, 0, 400)
+	mainFrame.Position = UDim2.new(0.7, 0, 0.2, 0)
+	mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+	mainFrame.BorderSizePixel = 0
+	mainFrame.Active = true
+	mainFrame.Draggable = true
+	mainFrame.BackgroundTransparency = 0.1
+	mainFrame.Parent = autoShooterUI
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 12)
+	corner.Parent = mainFrame
+
+	local border = Instance.new("UIStroke")
+	border.Color = Color3.fromRGB(180, 0, 0)
+	border.Thickness = 2
+	border.Parent = mainFrame
+
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.new(1, -20, 0, 35)
+	titleLabel.Position = UDim2.new(0, 10, 0, 0)
+	titleLabel.Text = "🔥 Base Protector"
+	titleLabel.Font = Enum.Font.GothamBold
+	titleLabel.TextSize = 20
+	titleLabel.TextColor3 = Color3.fromRGB(255, 60, 60)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.TextScaled = true
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+	titleLabel.Parent = mainFrame
+
+	local line = Instance.new("Frame")
+	line.Size = UDim2.new(1, -20, 0, 2)
+	line.Position = UDim2.new(0, 10, 0, 33)
+	line.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+	line.Parent = mainFrame
+
+	local lineCorner = Instance.new("UICorner")
+	lineCorner.CornerRadius = UDim.new(0, 99)
+	lineCorner.Parent = line
+
+	local scrollFrame = Instance.new("ScrollingFrame")
+	scrollFrame.Size = UDim2.new(1, -20, 0, 200)
+	scrollFrame.Position = UDim2.new(0, 10, 0, 45)
+	scrollFrame.BackgroundTransparency = 1
+	scrollFrame.BorderSizePixel = 0
+	scrollFrame.ScrollBarThickness = 4
+	scrollFrame.Parent = mainFrame
+
+	local listLayout = Instance.new("UIListLayout")
+	listLayout.Parent = scrollFrame
+
+	local function updatePlayerList()
+		scrollFrame:ClearAllChildren()
+		listLayout.Parent = scrollFrame
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= player then
+				local btn = Instance.new("TextButton")
+				btn.Size = UDim2.new(1, 0, 0, 35)
+				btn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+				btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+				btn.Font = Enum.Font.Gotham
+				btn.TextSize = 16
+				btn.Text = plr.Name
+				btn.BorderSizePixel = 0
+				local btnCorner = Instance.new("UICorner")
+				btnCorner.CornerRadius = UDim.new(0, 8)
+				btnCorner.Parent = btn
+				btn.Parent = scrollFrame
+
+				btn.MouseButton1Click:Connect(function()
+					autoShooterTarget = plr
+					titleLabel.Text = "🔥 Target: " .. plr.Name
+					showNotification("Target set: " .. plr.Name, Color3.fromRGB(0, 255, 0))
+				end)
+			end
+		end
+		scrollFrame.CanvasSize = UDim2.new(0, 0, 0, scrollFrame.CanvasLayout.AbsoluteContentSize.Y)
+	end
+
+	updatePlayerList()
+	Players.PlayerAdded:Connect(updatePlayerList)
+	Players.PlayerRemoving:Connect(updatePlayerList)
+
+	-- Laser Cape Auto-Hold button
+	local laserCapeBtn = Instance.new("TextButton")
+	laserCapeBtn.Size = UDim2.new(0.96, 0, 0, 35)
+	laserCapeBtn.Position = UDim2.new(0.02, 0, 0.68, 0)
+	laserCapeBtn.Text = "Auto-Hold Laser Cape: OFF"
+	laserCapeBtn.Font = Enum.Font.GothamBold
+	laserCapeBtn.TextSize = 16
+	laserCapeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	laserCapeBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+	laserCapeBtn.BorderSizePixel = 0
+	local laserCorner = Instance.new("UICorner")
+	laserCorner.CornerRadius = UDim.new(0, 12)
+	laserCorner.Parent = laserCapeBtn
+	laserCapeBtn.Parent = mainFrame
+
+	local laserCapeAutoEnabled = false
+	laserCapeBtn.MouseButton1Click:Connect(function()
+		laserCapeAutoEnabled = not laserCapeAutoEnabled
+		if laserCapeAutoEnabled then
+			laserCapeBtn.Text = "Auto-Hold Laser Cape: ON"
+			laserCapeBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+			showNotification("Auto-Hold Laser Cape: ON", Color3.fromRGB(0, 255, 0))
+			-- Start auto-equip loop
+			if laserCapeConnection then
+				laserCapeConnection:Disconnect()
+			end
+			laserCapeConnection = task.spawn(function()
+				while laserCapeAutoEnabled and baseProtectorEnabled do
+					local backpack = player:FindFirstChild("Backpack")
+					local char = player.Character
+					if backpack and char then
+						local laserCape = backpack:FindFirstChild("Laser Cape")
+						if laserCape then
+							local humanoid = char:FindFirstChildOfClass("Humanoid")
+							if humanoid then
+								humanoid:EquipTool(laserCape)
+							end
+						end
+					end
+					task.wait(0.1)
+				end
+			end)
+		else
+			laserCapeBtn.Text = "Auto-Hold Laser Cape: OFF"
+			laserCapeBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+			showNotification("Auto-Hold Laser Cape: OFF", Color3.fromRGB(255, 0, 0))
+			if laserCapeConnection then
+				laserCapeConnection:Disconnect()
+				laserCapeConnection = nil
+			end
+		end
+	end)
+
+	-- Shoot button
+	local shootBtn = Instance.new("TextButton")
+	shootBtn.Size = UDim2.new(0.45, 0, 0, 35)
+	shootBtn.Position = UDim2.new(0.02, 0, 0.8, 0)
+	shootBtn.Text = "Shoot"
+	shootBtn.Font = Enum.Font.GothamBold
+	shootBtn.TextSize = 16
+	shootBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	shootBtn.BackgroundColor3 = Color3.fromRGB(70, 170, 70)
+	shootBtn.BorderSizePixel = 0
+	local shootCorner = Instance.new("UICorner")
+	shootCorner.CornerRadius = UDim.new(0, 12)
+	shootCorner.Parent = shootBtn
+	shootBtn.Parent = mainFrame
+
+	shootBtn.MouseButton1Click:Connect(function()
+		autoShooterEnabled = true
+		showNotification("Auto Shooter: ON", Color3.fromRGB(0, 255, 0))
+	end)
+
+	-- Stop button
+	local stopBtn = Instance.new("TextButton")
+	stopBtn.Size = UDim2.new(0.45, 0, 0, 35)
+	stopBtn.Position = UDim2.new(0.53, 0, 0.8, 0)
+	stopBtn.Text = "Stop"
+	stopBtn.Font = Enum.Font.GothamBold
+	stopBtn.TextSize = 16
+	stopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	stopBtn.BackgroundColor3 = Color3.fromRGB(170, 60, 60)
+	stopBtn.BorderSizePixel = 0
+	local stopCorner = Instance.new("UICorner")
+	stopCorner.CornerRadius = UDim.new(0, 12)
+	stopCorner.Parent = stopBtn
+	stopBtn.Parent = mainFrame
+
+	stopBtn.MouseButton1Click:Connect(function()
+		autoShooterEnabled = false
+		autoShooterTarget = nil
+		titleLabel.Text = "🔥 Base Protector"
+		showNotification("Auto Shooter: OFF", Color3.fromRGB(255, 0, 0))
+	end)
+end
+
+local function removeAutoShooterUI()
+	if autoShooterUI then
+		autoShooterUI:Destroy()
+		autoShooterUI = nil
+	end
+	autoShooterEnabled = false
+	autoShooterTarget = nil
+	if laserCapeConnection then
+		laserCapeConnection:Disconnect()
+		laserCapeConnection = nil
+	end
+end
+
+local function toggleBaseProtector()
+	baseProtectorEnabled = not baseProtectorEnabled
+	if baseProtectorEnabled then
+		createAutoShooterUI()
+		showNotification("Base Protector: ON", Color3.fromRGB(0, 255, 0))
+		print("Base Protector: ON")
+	else
+		removeAutoShooterUI()
+		showNotification("Base Protector: OFF", Color3.fromRGB(255, 0, 0))
+		print("Base Protector: OFF")
+	end
+end
+
 -- ===== Auto Steal 機能 =====
 local autoStealEnabled = false
 local autoStealConnection = nil
@@ -1501,6 +1728,7 @@ createToggleRow("Desync", toggleDesync, function() return desyncEnabled end)
 createToggleRow("NoClip", toggleNoClip, function() return noClipEnabled end)
 createToggleRow("TP", toggleTP, function() return tpEnabled end)
 createToggleRow("Auto Steal", toggleAutoSteal, function() return autoStealEnabled end)
+createToggleRow("Base Protector", toggleBaseProtector, function() return baseProtectorEnabled end)
 createSaveButton()
 
 -- 設定をロード
