@@ -1102,16 +1102,44 @@ local tpButton
 local spawnPosition = nil
 local lastPosition = nil
 local isAtSpawn = false
+local tpKeybind = nil
+local tpKeybindButton = nil
+local keybindSettingMode = false
+local saveSettingsButton = nil
+
+-- ===== 設定保存システム =====
+local settings = {
+	tpKeybind = nil,
+}
+
+local function saveSettings()
+	settings.tpKeybind = tpKeybind
+	-- ここで設定を保存（必要に応じて拡張）
+	showNotification("Settings Saved", Color3.fromRGB(0, 255, 0))
+	print("Settings Saved")
+end
+
+local function loadSettings()
+	if settings.tpKeybind then
+		tpKeybind = settings.tpKeybind
+		if tpKeybindButton then
+			tpKeybindButton.Text = tpKeybind.Name
+		end
+	end
+end
 
 local function equipFlyingCarpet()
 	local backpack = player:FindFirstChild("Backpack")
 	if not backpack then return end
 
 	local carpet = backpack:FindFirstChild("Flying Carpet")
-	if carpet then
+	local broom = backpack:FindFirstChild("Witch's Broom")
+	
+	local tool = carpet or broom
+	if tool then
 		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 		if humanoid then
-			humanoid:EquipTool(carpet)
+			humanoid:EquipTool(tool)
 		end
 	end
 end
@@ -1187,14 +1215,105 @@ local function removeTPButton()
 	end
 end
 
+local function createKeybindButton()
+	if tpKeybindButton then return end
+
+	tpKeybindButton = Instance.new("TextButton")
+	tpKeybindButton.Name = "KeybindButton"
+	tpKeybindButton.Size = UDim2.new(0, 60, 0, 30)
+	tpKeybindButton.Position = UDim2.new(1, -70, 0.5, 40)
+	tpKeybindButton.BackgroundColor3 = Color3.fromRGB(10, 0, 0)
+	tpKeybindButton.BackgroundTransparency = 0.1
+	tpKeybindButton.BorderSizePixel = 0
+	tpKeybindButton.AutoButtonColor = false
+	tpKeybindButton.Text = tpKeybind and tpKeybind.Name or "Set Key"
+	tpKeybindButton.TextColor3 = Color3.fromRGB(255, 60, 60)
+	tpKeybindButton.Font = Enum.Font.GothamBold
+	tpKeybindButton.TextSize = 12
+	tpKeybindButton.Parent = screenGui
+
+	local btnCorner = Instance.new("UICorner")
+	btnCorner.CornerRadius = UDim.new(0, 6)
+	btnCorner.Parent = tpKeybindButton
+
+	local btnBorder = Instance.new("UIStroke")
+	btnBorder.Color = Color3.fromRGB(180, 0, 0)
+	btnBorder.Thickness = 1
+	btnBorder.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	btnBorder.Parent = tpKeybindButton
+
+	tpKeybindButton.MouseButton1Click:Connect(function()
+		keybindSettingMode = true
+		tpKeybindButton.Text = "Press Key..."
+		tpKeybindButton.BackgroundColor3 = Color3.fromRGB(40, 40, 0)
+		showNotification("Press a key to bind", Color3.fromRGB(255, 255, 0))
+	end)
+end
+
+local function removeKeybindButton()
+	if tpKeybindButton then
+		tpKeybindButton:Destroy()
+		tpKeybindButton = nil
+	end
+	keybindSettingMode = false
+end
+
+local function executeTP()
+	local char = player.Character
+	if not char then return end
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	if not spawnPosition then
+		spawnPosition = hrp.Position
+		showNotification("Spawn Position Saved", Color3.fromRGB(0, 255, 0))
+		return
+	end
+
+	if isAtSpawn then
+		if lastPosition then
+			teleportTo(lastPosition)
+			isAtSpawn = false
+			showNotification("TP: Back to last position", Color3.fromRGB(0, 255, 0))
+		end
+	else
+		lastPosition = hrp.Position
+		teleportTo(spawnPosition)
+		isAtSpawn = true
+		showNotification("TP: To spawn", Color3.fromRGB(0, 255, 0))
+	end
+end
+
+-- キー入力検出
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	
+	if keybindSettingMode and input.KeyCode ~= Enum.KeyCode.Unknown then
+		tpKeybind = input.KeyCode
+		keybindSettingMode = false
+		if tpKeybindButton then
+			tpKeybindButton.Text = tpKeybind.Name
+			tpKeybindButton.BackgroundColor3 = Color3.fromRGB(10, 0, 0)
+		end
+		showNotification("Keybind set: " .. tpKeybind.Name, Color3.fromRGB(0, 255, 0))
+		return
+	end
+	
+	if tpEnabled and tpKeybind and input.KeyCode == tpKeybind then
+		executeTP()
+	end
+end)
+
 local function toggleTP()
 	tpEnabled = not tpEnabled
 	if tpEnabled then
 		createTPButton()
+		createKeybindButton()
 		showNotification("TP: ON", Color3.fromRGB(0, 255, 0))
 		print("TP: ON")
 	else
 		removeTPButton()
+		removeKeybindButton()
 		showNotification("TP: OFF", Color3.fromRGB(255, 0, 0))
 		print("TP: OFF")
 	end
@@ -1337,6 +1456,39 @@ local function toggleAutoSteal()
 	end
 end
 
+-- ===== 設定保存ボタン =====
+local function createSaveButton()
+	if saveSettingsButton then return end
+
+	saveSettingsButton = Instance.new("TextButton")
+	saveSettingsButton.Name = "SaveSettingsButton"
+	saveSettingsButton.Size = UDim2.new(1, -20, 0, 35)
+	saveSettingsButton.Position = UDim2.new(0, 10, 0, 0)
+	saveSettingsButton.BackgroundColor3 = Color3.fromRGB(20, 0, 0)
+	saveSettingsButton.BackgroundTransparency = 0.2
+	saveSettingsButton.BorderSizePixel = 0
+	saveSettingsButton.AutoButtonColor = false
+	saveSettingsButton.Text = "Save Settings"
+	saveSettingsButton.TextColor3 = Color3.fromRGB(255, 60, 60)
+	saveSettingsButton.Font = Enum.Font.GothamBold
+	saveSettingsButton.TextSize = 14
+	saveSettingsButton.Parent = panelScroll
+
+	local btnCorner = Instance.new("UICorner")
+	btnCorner.CornerRadius = UDim.new(0, 8)
+	btnCorner.Parent = saveSettingsButton
+
+	local btnBorder = Instance.new("UIStroke")
+	btnBorder.Color = Color3.fromRGB(180, 0, 0)
+	btnBorder.Thickness = 1
+	btnBorder.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	btnBorder.Parent = saveSettingsButton
+
+	saveSettingsButton.MouseButton1Click:Connect(function()
+		saveSettings()
+	end)
+end
+
 -- ===== 設定にトグルを追加 =====
 createToggleRow("Xray", toggleXRay, function() return xrayEnabled end)
 createToggleRow("Antibee", toggleAntibee, function() return antibeeEnabled end)
@@ -1349,5 +1501,9 @@ createToggleRow("Desync", toggleDesync, function() return desyncEnabled end)
 createToggleRow("NoClip", toggleNoClip, function() return noClipEnabled end)
 createToggleRow("TP", toggleTP, function() return tpEnabled end)
 createToggleRow("Auto Steal", toggleAutoSteal, function() return autoStealEnabled end)
+createSaveButton()
+
+-- 設定をロード
+loadSettings()
 
 print("masahub UI initialized!")
