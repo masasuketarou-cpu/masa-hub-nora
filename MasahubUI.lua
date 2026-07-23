@@ -1,533 +1,697 @@
--- merged script with red-to-green gradient fill + rounded progress bar
-local CONFIG = {
-    AUTO_STEAL_ENABLED = true,
-    HOLD_MIN = 1.3,
-    HOLD_MAX = 2.6,
-    ENTRY_DELAY = 0.3,
-    COOLDOWN = 0.05,
-    STEAL_RANGE = 10,
-    PRIME_RANGE = 80,
+-- ============================================================
+-- KAWATAN HUB - INSTANT TP SCRIPT
+-- ============================================================
+-- Features: Auto TP on Steal with Visual Indicators
+-- Simple GUI with PVP theming
+-- Mobile compatible & draggable
+-- ============================================================
 
-    -- UI
-    GUI_NAME = "IrishAutoGrabRounded",
-    WIDTH = 408,
-    HEIGHT = 44,
-    LEFT_WIDTH = 250,
-    RIGHT_WIDTH = 158,
-    OUTLINE = Color3.fromRGB(229, 229, 235),
-    INNER_OUTLINE = Color3.fromRGB(118, 118, 126),
-    BG = Color3.fromRGB(1, 1, 2),
-    BG_SOFT = Color3.fromRGB(7, 7, 9),
-    TEXT = Color3.fromRGB(248, 248, 249),
-    MUTED = Color3.fromRGB(223, 223, 228),
-
-    -- Couleurs du dégradé de progression
-    START_LEFT = Color3.fromRGB(255, 50, 50),   -- rouge vif
-    START_RIGHT = Color3.fromRGB(20, 0, 0),     -- noir rougeâtre
-    END_LEFT = Color3.fromRGB(50, 255, 50),     -- vert vif
-    END_RIGHT = Color3.fromRGB(0, 50, 0),       -- noir verdâtre
-}
+-- ============================================================
+-- SERVICES
+-- ============================================================
 
 local S = {
     Players = game:GetService("Players"),
-    ReplicatedStorage = game:GetService("ReplicatedStorage"),
-    RunService = game:GetService("RunService"),
     UserInputService = game:GetService("UserInputService"),
     TweenService = game:GetService("TweenService"),
-    Stats = game:GetService("Stats"),
+    RunService = game:GetService("RunService"),
+    ProximityPromptService = game:GetService("ProximityPromptService"),
 }
 
-local Packages = S.ReplicatedStorage:WaitForChild("Packages")
-local Datas = S.ReplicatedStorage:WaitForChild("Datas")
-local Synchronizer = require(Packages:WaitForChild("Synchronizer"))
-local AnimalsData = require(Datas:WaitForChild("Animals"))
 S.LocalPlayer = S.Players.LocalPlayer
+S.PlayerGui = S.LocalPlayer:FindFirstChild("PlayerGui") or S.LocalPlayer:WaitForChild("PlayerGui", 2)
 
-local allAnimalsCache, PromptMemoryCache, InternalStealCache = {}, {}, {}
-local stealConnection = nil
+-- ============================================================
+-- COLORS (PVP Script Theming)
+-- ============================================================
 
-local StealState = {
-    active = false, startTime = 0, phase = "idle",
-    label = "", lastResult = "", lastResultTime = 0,
-    totalSteals = 0, failedSteals = 0,
+local COLORS = {
+    Accent = Color3.fromRGB(0, 150, 255),
+    Surface = Color3.fromRGB(25, 35, 50),
+    Background = Color3.fromRGB(8, 8, 15),
+    Text = Color3.fromRGB(255, 255, 255),
+    TextDim = Color3.fromRGB(168, 184, 208),
+    Success = Color3.fromRGB(120, 255, 200),
+    Green = Color3.fromRGB(0, 200, 0), -- Solid green for valid trajectory
+    Red = Color3.fromRGB(200, 0, 0), -- Solid red for blocked trajectory
 }
 
--- ==================== MÊMES FONCTIONS MÉTIER (script1) ====================
-local function isMyBaseAnimal(animalData) -- ... identique ...
-    if not animalData or not animalData.plot then return false end
-    local plots = workspace:FindFirstChild("Plots")
-    if not plots then return false end
-    local plot = plots:FindFirstChild(animalData.plot)
-    if not plot then return false end
-    local channel = Synchronizer:Get(plot.Name)
-    if channel then
-        local owner = channel:Get("Owner")
-        if owner then
-            if typeof(owner) == "Instance" and owner:IsA("Player") then
-                return owner.UserId == S.LocalPlayer.UserId
-            elseif typeof(owner) == "table" and owner.UserId then
-                return owner.UserId == S.LocalPlayer.UserId
-            elseif typeof(owner) == "Instance" then
-                return owner == S.LocalPlayer
-            end
-        end
-    end
-    local sign = plot:FindFirstChild("PlotSign")
-    if sign then
-        local yourBase = sign:FindFirstChild("YourBase")
-        if yourBase and yourBase:IsA("BillboardGui") then
-            return yourBase.Enabled == true
-        end
-    end
-    return false
-end
+-- ============================================================
+-- CONFIG SYSTEM
+-- ============================================================
 
-local function findProximityPromptForAnimal(animalData) -- ... identique ...
-    if not animalData then return nil end
-    local cached = PromptMemoryCache[animalData.uid]
-    if cached and cached.Parent then return cached end
-    local plot = workspace.Plots:FindFirstChild(animalData.plot)
-    if not plot then return nil end
-    local podiums = plot:FindFirstChild("AnimalPodiums")
-    if not podiums then return nil end
-    local podium = podiums:FindFirstChild(animalData.slot)
-    if not podium then return nil end
-    local base = podium:FindFirstChild("Base")
-    if not base then return nil end
-    local spawn = base:FindFirstChild("Spawn")
-    if not spawn then return nil end
-    local attach = spawn:FindFirstChild("PromptAttachment")
-    if not attach then return nil end
-    for _, p in ipairs(attach:GetChildren()) do
-        if p:IsA("ProximityPrompt") then
-            PromptMemoryCache[animalData.uid] = p
-            return p
-        end
-    end
-    return nil
-end
+local CONFIG_FILE = "KawatanInstantTPConfig.json"
 
-local function getAnimalPosition(animalData) -- ... identique ...
-    local plot = workspace.Plots:FindFirstChild(animalData.plot)
-    if not plot then return nil end
-    local podiums = plot:FindFirstChild("AnimalPodiums")
-    if not podiums then return nil end
-    local podium = podiums:FindFirstChild(animalData.slot)
-    if not podium then return nil end
-    return podium:GetPivot().Position
-end
+local CONFIG = {
+    GUI_POSITION_X = nil,
+    GUI_POSITION_Y = nil,
+    GUI_COLLAPSED = false,
+    ENABLED = false,
+    SAVED_POSITION = nil, -- Saved CFrame for teleport (pos1)
+}
 
-local function distToAnimal(animalData) -- ... identique ...
-    local character = S.LocalPlayer.Character
-    if not character then return math.huge end
-    local hrp = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("UpperTorso")
-    if not hrp then return math.huge end
-    local pos = getAnimalPosition(animalData)
-    if not pos then return math.huge end
-    return (hrp.Position - pos).Magnitude
-end
+-- Hardcoded target positions (exactly like leak script)
+local targetPositions = {
+    Vector3.new(-481.88, -3.79, 138.02),
+    Vector3.new(-481.75, -3.79, 89.18),
+    Vector3.new(-481.82, -3.79, 30.95),
+    Vector3.new(-481.75, -3.79, -17.79),
+    Vector3.new(-481.80, -3.79, -76.06),
+    Vector3.new(-481.72, -3.79, -124.70),
+    Vector3.new(-337.45, -3.85, -124.72),
+    Vector3.new(-337.37, -3.85, -76.07),
+    Vector3.new(-337.46, -3.79, -17.72),
+    Vector3.new(-337.41, -3.79, 30.92),
+    Vector3.new(-337.32, -3.79, 89.02),
+    Vector3.new(-337.27, -3.79, 137.90),
+    Vector3.new(-337.45, -3.79, 196.29),
+    Vector3.new(-337.37, -3.79, 244.91),
+    Vector3.new(-481.72, -3.79, 196.21),
+    Vector3.new(-481.76, -3.79, 244.92)
+}
 
-local function pickClosest() -- ... identique ...
-    local character = S.LocalPlayer.Character
-    if not character then return nil end
-    local hrp = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("UpperTorso")
-    if not hrp then return nil end
-    local best, bestDist = nil, math.huge
-    for _, animalData in ipairs(allAnimalsCache) do
-        if isMyBaseAnimal(animalData) then continue end
-        local pos = getAnimalPosition(animalData)
-        if not pos then continue end
-        local dist = (hrp.Position - pos).Magnitude
-        if dist > CONFIG.PRIME_RANGE then continue end
-        if dist < bestDist then bestDist, best = dist, animalData end
-    end
-    return best
-end
-
-local function buildStealCallbacks(prompt) -- ... identique ...
-    if InternalStealCache[prompt] then return end
-    local data = { holdCallbacks = {}, triggerCallbacks = {}, ready = true }
-    local ok1, conns1 = pcall(getconnections, prompt.PromptButtonHoldBegan)
-    if ok1 and type(conns1) == "table" then
-        for _, conn in ipairs(conns1) do
-            if type(conn.Function) == "function" then table.insert(data.holdCallbacks, conn.Function) end
-        end
-    end
-    local ok2, conns2 = pcall(getconnections, prompt.Triggered)
-    if ok2 and type(conns2) == "table" then
-        for _, conn in ipairs(conns2) do
-            if type(conn.Function) == "function" then table.insert(data.triggerCallbacks, conn.Function) end
-        end
-    end
-    if #data.holdCallbacks > 0 or #data.triggerCallbacks > 0 then
-        InternalStealCache[prompt] = data
-    end
-end
-
-local function executeStealAsync(prompt, animalData) -- ... identique ...
-    local data = InternalStealCache[prompt]
-    if not data or not data.ready then return false end
-    data.ready = false
-    local label = animalData.name or "Animal"
-    StealState.active, StealState.startTime, StealState.phase, StealState.label = true, tick(), "holding", label
-    task.spawn(function()
-        for _, fn in ipairs(data.holdCallbacks) do task.spawn(fn) end
-        task.wait(CONFIG.HOLD_MIN)
-        StealState.phase = "waitingRange"
-        local alreadyInRange = distToAnimal(animalData) <= CONFIG.STEAL_RANGE
-        local fired = false
-        while true do
-            if tick() - StealState.startTime > CONFIG.HOLD_MAX then break end
-            if not prompt.Parent then break end
-            if distToAnimal(animalData) <= CONFIG.STEAL_RANGE then
-                if not alreadyInRange then task.wait(CONFIG.ENTRY_DELAY) end
-                for _, fn in ipairs(data.triggerCallbacks) do task.spawn(fn) end
-                fired = true
-                break
-            end
-            task.wait()
-        end
-        if fired then
-            StealState.totalSteals += 1
-            StealState.lastResult = "Stole " .. label
+local function saveConfig()
+    if not writefile then return end
+    -- Convert CFrame to serializable format for saved position
+    local configToSave = {}
+    for k, v in pairs(CONFIG) do
+        if k == "SAVED_POSITION" and v then
+            -- Save CFrame as table with Position and LookVector
+            configToSave[k] = {
+                Position = {X = v.Position.X, Y = v.Position.Y, Z = v.Position.Z},
+                LookVector = {X = v.LookVector.X, Y = v.LookVector.Y, Z = v.LookVector.Z}
+            }
         else
-            StealState.failedSteals += 1
-            StealState.lastResult = "Missed window: " .. label
-        end
-        StealState.active, StealState.phase = false, "idle"
-        StealState.lastResultTime = tick()
-        task.wait(CONFIG.COOLDOWN)
-        data.ready = true
-    end)
-    return true
-end
-
-local function attemptSteal(prompt, animalData) -- ... identique ...
-    if not prompt or not prompt.Parent then return false end
-    buildStealCallbacks(prompt)
-    if not InternalStealCache[prompt] then return false end
-    return executeStealAsync(prompt, animalData)
-end
-
-local function scanAllPlots() -- ... identique ...
-    local plots = workspace:FindFirstChild("Plots")
-    if not plots then return 0 end
-    local newCache = {}
-    for _, plot in ipairs(plots:GetChildren()) do
-        local channel = Synchronizer:Get(plot.Name)
-        if not channel then continue end
-        local animalList = channel:Get("AnimalList")
-        if not animalList then continue end
-        local owner = channel:Get("Owner")
-        if not owner then continue end
-        for slot, animalData in pairs(animalList) do
-            if type(animalData) == "table" then
-                local animalName = animalData.Index
-                local animalInfo = AnimalsData[animalName]
-                if not animalInfo then continue end
-                table.insert(newCache, {
-                    name = animalInfo.DisplayName or animalName,
-                    plot = plot.Name,
-                    slot = tostring(slot),
-                    uid = plot.Name .. "_" .. tostring(slot),
-                })
-            end
+            configToSave[k] = v
         end
     end
-    allAnimalsCache = newCache
-    return #allAnimalsCache
-end
-
-local function startAutoSteal() -- ... identique ...
-    if stealConnection then return end
-    stealConnection = S.RunService.Heartbeat:Connect(function()
-        if not CONFIG.AUTO_STEAL_ENABLED then return end
-        if StealState.active then return end
-        local target = pickClosest()
-        if not target then return end
-        local prompt = PromptMemoryCache[target.uid]
-        if not prompt or not prompt.Parent then prompt = findProximityPromptForAnimal(target) end
-        if prompt then attemptSteal(prompt, target) end
+    
+    local success, jsonData = pcall(function()
+        return game:GetService("HttpService"):JSONEncode(configToSave)
     end)
+    if success and jsonData then
+        pcall(function()
+            writefile(CONFIG_FILE, jsonData)
+        end)
+    end
 end
 
-local function stopAutoSteal()
-    if stealConnection then stealConnection:Disconnect() end
-    stealConnection = nil
-end
-
--- ==================== INTERFACE (script2 avec améliorations) ====================
-local gui, pillFrame, leftSection, leftFill, percentLabel, statsLabel
-local fillGradient  -- garder une référence pour changer la couleur
-
-local function safeDisconnect(conn)
-    if conn then conn:Disconnect() end
-end
-
-local function destroyExistingGui()
-    local playerGui = S.LocalPlayer:WaitForChild("PlayerGui")
-    local old = playerGui:FindFirstChild(CONFIG.GUI_NAME)
-    if old then old:Destroy() end
-end
-
-local function makeCorner(instance, radius)
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, radius)
-    c.Parent = instance
-    return c
-end
-
-local function makeStroke(instance, color, thickness, transparency)
-    local s = Instance.new("UIStroke")
-    s.Color = color
-    s.Thickness = thickness
-    s.Transparency = transparency or 0
-    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    s.Parent = instance
-    return s
-end
-
-local function enableDragging(target, handle)
-    local dragging, dragStart, startPos, moved = false
-    handle.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-           or input.UserInputType == Enum.UserInputType.Touch then
-            dragging, moved = true, false
-            dragStart = input.Position
-            startPos = target.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                    if not moved then
-                        CONFIG.AUTO_STEAL_ENABLED = not CONFIG.AUTO_STEAL_ENABLED
-                        if CONFIG.AUTO_STEAL_ENABLED then startAutoSteal() else stopAutoSteal() end
-                    end
-                end
-            end)
-        end
+local function loadConfig()
+    if not readfile or not isfile then return end
+    if not isfile(CONFIG_FILE) then return end
+    
+    local ok, data = pcall(function()
+        return readfile(CONFIG_FILE)
     end)
-    handle.InputChanged:Connect(function(input)
-        if (input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch) and dragging then
-            local delta = input.Position - dragStart
-            if not moved and (math.abs(delta.X) > 4 or math.abs(delta.Y) > 4) then moved = true end
-            if moved then
-                target.Position = UDim2.new(
-                    startPos.X.Scale, startPos.X.Offset + delta.X,
-                    startPos.Y.Scale, startPos.Y.Offset + delta.Y
+    if not ok or not data then return end
+    
+    local ok2, saved = pcall(function()
+        return game:GetService("HttpService"):JSONDecode(data)
+    end)
+    if ok2 and saved then
+        if saved.GUI_POSITION_X then CONFIG.GUI_POSITION_X = saved.GUI_POSITION_X end
+        if saved.GUI_POSITION_Y then CONFIG.GUI_POSITION_Y = saved.GUI_POSITION_Y end
+        if saved.GUI_COLLAPSED ~= nil then CONFIG.GUI_COLLAPSED = saved.GUI_COLLAPSED end
+        if saved.ENABLED ~= nil then CONFIG.ENABLED = saved.ENABLED end
+        if saved.SAVED_POSITION then
+            -- Load saved position (stored as table with Position and LookVector)
+            if saved.SAVED_POSITION.Position and saved.SAVED_POSITION.LookVector then
+                CONFIG.SAVED_POSITION = CFrame.new(
+                    Vector3.new(saved.SAVED_POSITION.Position.X, saved.SAVED_POSITION.Position.Y, saved.SAVED_POSITION.Position.Z),
+                    Vector3.new(saved.SAVED_POSITION.LookVector.X, saved.SAVED_POSITION.LookVector.Y, saved.SAVED_POSITION.LookVector.Z) + Vector3.new(saved.SAVED_POSITION.Position.X, saved.SAVED_POSITION.Position.Y, saved.SAVED_POSITION.Position.Z)
                 )
             end
         end
-    end)
-    S.UserInputService.InputChanged:Connect(function(input)
-        if dragging and moved and (input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragStart
-            target.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            )
-        end
-    end)
-end
-
-local function getPingMs()
-    local ping = 0
-    pcall(function() ping = math.floor(S.LocalPlayer:GetNetworkPing() * 1000) end)
-    if ping > 0 then return ping end
-    local network = S.Stats:FindFirstChild("Network")
-    if network and network:FindFirstChild("ServerStatsItem") then
-        local serverStats = network.ServerStatsItem
-        local dataPing = serverStats:FindFirstChild("Data Ping")
-        if dataPing then
-            pcall(function() ping = math.floor(dataPing:GetValue()) end)
-        end
-    end
-    return ping
-end
-
-local function updateProgress(progress)
-    progress = math.clamp(progress, 0, 1)
-    if leftFill then
-        leftFill.Size = UDim2.new(progress, 0, 1, 0)
-    end
-    if percentLabel then
-        percentLabel.Text = string.format("%d%%", math.floor(progress * 100 + 0.5))
-    end
-
-    -- Mise à jour du gradient de couleur
-    if fillGradient then
-        local leftColor = CONFIG.START_LEFT:Lerp(CONFIG.END_LEFT, progress)
-        local rightColor = CONFIG.START_RIGHT:Lerp(CONFIG.END_RIGHT, progress)
-        fillGradient.Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0, leftColor),
-            ColorSequenceKeypoint.new(1, rightColor),
-        })
     end
 end
 
-local function buildPillUI()
-    destroyExistingGui()
+loadConfig()
 
-    gui = Instance.new("ScreenGui")
-    gui.Name = CONFIG.GUI_NAME
-    gui.ResetOnSpawn = false
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.Parent = S.LocalPlayer:WaitForChild("PlayerGui")
+-- ============================================================
+-- HELPER FUNCTIONS
+-- ============================================================
 
-    pillFrame = Instance.new("Frame")
-    pillFrame.Name = "PillBar"
-    pillFrame.AnchorPoint = Vector2.new(0.5, 0)
-    pillFrame.Position = UDim2.new(0.5, 0, 0, 20)
-    pillFrame.Size = UDim2.new(0, CONFIG.WIDTH, 0, CONFIG.HEIGHT)
-    pillFrame.BackgroundColor3 = CONFIG.BG
-    pillFrame.BorderSizePixel = 0
-    pillFrame.Parent = gui
-    makeCorner(pillFrame, 999)
-    makeStroke(pillFrame, CONFIG.OUTLINE, 1, 0.05)
+local function tween(obj, tweenInfo, props)
+    local tween = S.TweenService:Create(obj, tweenInfo, props)
+    tween:Play()
+    return tween
+end
 
-    local content = Instance.new("Frame")
-    content.Name = "Content"
-    content.Size = UDim2.new(1, -6, 1, -6)
-    content.Position = UDim2.new(0, 3, 0, 3)
-    content.BackgroundTransparency = 1
-    content.ZIndex = 2
-    content.Parent = pillFrame
+local tweenInfoMedium = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
-    leftSection = Instance.new("Frame")
-    leftSection.Name = "LeftSection"
-    leftSection.Size = UDim2.new(0, CONFIG.LEFT_WIDTH, 1, 0)
-    leftSection.BackgroundColor3 = CONFIG.BG_SOFT
-    leftSection.BorderSizePixel = 0
-    leftSection.ClipsDescendants = false  -- pas nécessaire avec l'arrondi du fill
-    leftSection.Parent = content
-    makeCorner(leftSection, 999)
+-- ============================================================
+-- VISUAL INDICATORS
+-- ============================================================
 
-    local leftOverlay = Instance.new("Frame")
-    leftOverlay.Size = UDim2.new(1, 0, 1, 0)
-    leftOverlay.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    leftOverlay.BackgroundTransparency = 0.988
-    leftOverlay.BorderSizePixel = 0
-    leftOverlay.Parent = leftSection
-    makeCorner(leftOverlay, 999)
+local beam = nil
+local beamAttachment0 = nil
+local beamAttachment1 = nil
+local diamond = nil
+local indicatorFolder = nil
 
-    leftFill = Instance.new("Frame")
-    leftFill.Name = "ProgressFill"
-    leftFill.Size = UDim2.new(0, 0, 1, 0)
-    leftFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255) -- sera masqué par le gradient
-    leftFill.BorderSizePixel = 0
-    leftFill.Parent = leftSection
-    makeCorner(leftFill, 999)  -- <-- rend la barre arrondie pour ne pas dépasser
-    leftFill.ZIndex = 1
+local function createIndicator()
+    if indicatorFolder then return end
+    
+    indicatorFolder = Instance.new("Folder")
+    indicatorFolder.Name = "InstantTPIndicator"
+    indicatorFolder.Parent = workspace
+    
+    -- Diamond (much larger, solid color)
+    -- Use Model to ensure center positioning
+    local diamondModel = Instance.new("Model")
+    diamondModel.Name = "DiamondModel"
+    diamondModel.Parent = indicatorFolder
+    
+    diamond = Instance.new("Part")
+    diamond.Name = "Diamond"
+    diamond.Size = Vector3.new(6, 12, 6)
+    diamond.Material = Enum.Material.Neon
+    diamond.Color = COLORS.Red
+    diamond.Transparency = 0
+    diamond.Anchored = true
+    diamond.CanCollide = false
+    diamond.Parent = diamondModel
+    
+    local diamondMesh = Instance.new("SpecialMesh")
+    diamondMesh.MeshType = Enum.MeshType.FileMesh
+    diamondMesh.MeshId = "rbxassetid://9756362"
+    diamondMesh.Scale = Vector3.new(3, 4, 3)
+    diamondMesh.Parent = diamond
+    
+    -- Set diamond as PrimaryPart so we can position the model's center
+    diamondModel.PrimaryPart = diamond
+end
 
-    fillGradient = Instance.new("UIGradient")
-    fillGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, CONFIG.START_LEFT),
-        ColorSequenceKeypoint.new(1, CONFIG.START_RIGHT),
+local function updateIndicator(tpPosition)
+    if not indicatorFolder or not diamond then return end
+    if not tpPosition then return end
+    
+    -- Update diamond model position so center is at exact TP location
+    local diamondModel = diamond.Parent
+    if diamondModel and diamondModel:IsA("Model") and diamondModel.PrimaryPart then
+        diamondModel:SetPrimaryPartCFrame(CFrame.new(tpPosition))
+    else
+        -- Fallback: position diamond directly (assuming pivot is at center)
+        diamond.CFrame = CFrame.new(tpPosition)
+    end
+    
+    -- Update beam attachment at center of diamond
+    if beamAttachment1 then
+        beamAttachment1.Position = Vector3.new(0, 0, 0)
+    end
+end
+
+local function destroyIndicator()
+    if indicatorFolder then
+        indicatorFolder:Destroy()
+        indicatorFolder = nil
+        diamond = nil
+    end
+end
+
+local function createBeam()
+    if beam then return end
+    if not diamond then return end -- Wait for diamond to be created first
+    
+    local character = S.LocalPlayer.Character
+    if not character then return end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    -- Attachments
+    beamAttachment0 = Instance.new("Attachment")
+    beamAttachment0.Name = "BeamAttachment0"
+    beamAttachment0.Parent = hrp
+    
+    beamAttachment1 = Instance.new("Attachment")
+    beamAttachment1.Name = "BeamAttachment1"
+    beamAttachment1.Parent = diamond
+    beamAttachment1.Position = Vector3.new(0, 0, 0) -- Center of diamond
+    
+    -- Beam (red color)
+    beam = Instance.new("Beam")
+    beam.Attachment0 = beamAttachment0
+    beam.Attachment1 = beamAttachment1
+    beam.Color = ColorSequence.new(COLORS.Red)
+    beam.Width0 = 0.25 -- Thinner to represent raycast width
+    beam.Width1 = 0.25
+    beam.FaceCamera = true
+    beam.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0),
+        NumberSequenceKeypoint.new(1, 0)
     })
-    fillGradient.Rotation = 0
-    fillGradient.Parent = leftFill
-
-    makeStroke(leftSection, CONFIG.INNER_OUTLINE, 1, 0.18)
-
-    local stealLabel = Instance.new("TextLabel")
-    stealLabel.Name = "StealLabel"
-    stealLabel.BackgroundTransparency = 1
-    stealLabel.Position = UDim2.new(0, 14, 0, 0)
-    stealLabel.Size = UDim2.new(0, 120, 1, 0)
-    stealLabel.Font = Enum.Font.GothamBlack
-    stealLabel.Text = "STEAL"
-    stealLabel.TextColor3 = CONFIG.TEXT
-    stealLabel.TextSize = 11
-    stealLabel.TextXAlignment = Enum.TextXAlignment.Left
-    stealLabel.ZIndex = 3
-    stealLabel.Parent = leftSection
-
-    percentLabel = Instance.new("TextLabel")
-    percentLabel.Name = "PercentLabel"
-    percentLabel.BackgroundTransparency = 1
-    percentLabel.AnchorPoint = Vector2.new(1, 0)
-    percentLabel.Position = UDim2.new(1, -11, 0, 0)
-    percentLabel.Size = UDim2.new(0, 46, 1, 0)
-    percentLabel.Font = Enum.Font.GothamBlack
-    percentLabel.Text = "0%"
-    percentLabel.TextColor3 = CONFIG.TEXT
-    percentLabel.TextSize = 10
-    percentLabel.TextXAlignment = Enum.TextXAlignment.Right
-    percentLabel.ZIndex = 3
-    percentLabel.Parent = leftSection
-
-    local divider = Instance.new("Frame")
-    divider.Name = "Divider"
-    divider.Position = UDim2.new(0, CONFIG.LEFT_WIDTH + 5, 0.13, 0)
-    divider.Size = UDim2.new(0, 1, 0.74, 0)
-    divider.BackgroundColor3 = Color3.fromRGB(216, 216, 222)
-    divider.BackgroundTransparency = 0.28
-    divider.BorderSizePixel = 0
-    divider.ZIndex = 3
-    divider.Parent = content
-
-    rightSection = Instance.new("Frame")
-    rightSection.Name = "RightSection"
-    rightSection.Position = UDim2.new(0, CONFIG.LEFT_WIDTH + 11, 0, 0)
-    rightSection.Size = UDim2.new(0, CONFIG.RIGHT_WIDTH - 11, 1, 0)
-    rightSection.BackgroundTransparency = 1
-    rightSection.Parent = content
-
-    statsLabel = Instance.new("TextLabel")
-    statsLabel.Name = "StatsLabel"
-    statsLabel.BackgroundTransparency = 1
-    statsLabel.Size = UDim2.new(1, -8, 1, 0)
-    statsLabel.Position = UDim2.new(0, 8, 0, 0)
-    statsLabel.Font = Enum.Font.GothamBold
-    statsLabel.Text = "0 FPS | 0ms | R:" .. CONFIG.PRIME_RANGE
-    statsLabel.TextColor3 = CONFIG.MUTED
-    statsLabel.TextSize = 10
-    statsLabel.TextXAlignment = Enum.TextXAlignment.Left
-    statsLabel.Parent = rightSection
-
-    enableDragging(pillFrame, pillFrame)
-    updateProgress(0)
+    beam.Parent = hrp
 end
 
--- Mise à jour FPS + progression
-local lastFrameTick = tick()
-local fpsCounter = 0
-local currentFps = 60
-local renderConnection
+local function destroyBeam()
+    if beam then
+        beam:Destroy()
+        beam = nil
+    end
+    if beamAttachment0 then
+        beamAttachment0:Destroy()
+        beamAttachment0 = nil
+    end
+    if beamAttachment1 then
+        beamAttachment1:Destroy()
+        beamAttachment1 = nil
+    end
+end
 
-local function startUIUpdater()
-    safeDisconnect(renderConnection)
-    lastFrameTick = tick()
-    fpsCounter = 0
-    renderConnection = S.RunService.RenderStepped:Connect(function()
-        fpsCounter += 1
-        local now = tick()
-        if now - lastFrameTick >= 1 then
-            currentFps = fpsCounter
-            fpsCounter = 0
-            lastFrameTick = now
+local function updateVisuals()
+    if not CONFIG.ENABLED then
+        destroyBeam()
+        destroyIndicator()
+        return
+    end
+    
+    local character = S.LocalPlayer.Character
+    if not character then return end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    -- Use saved position
+    if not CONFIG.SAVED_POSITION then
+        destroyBeam()
+        destroyIndicator()
+        return
+    end
+    
+    local tpPosition = CONFIG.SAVED_POSITION.Position
+    
+    createIndicator()
+    updateIndicator(tpPosition)
+    
+    -- Update diamond color (red)
+    if diamond then
+        diamond.Color = COLORS.Red
+    end
+    
+    -- Create or update beam
+    if not beam then
+        createBeam()
+    else
+        -- Update beam attachment if diamond exists
+        if diamond and beamAttachment1 then
+            if beamAttachment1.Parent ~= diamond then
+                beamAttachment1.Parent = diamond
+            end
+            beamAttachment1.Position = Vector3.new(0, 0, 0) -- Center of diamond
         end
+    end
+    
+    -- Beam is always red
+    if beam then
+        beam.Color = ColorSequence.new(COLORS.Red)
+    end
+end
 
-        local progress = 0
-        if StealState.active then
-            progress = math.clamp((tick() - StealState.startTime) / CONFIG.HOLD_MAX, 0, 1)
+-- ============================================================
+-- TELEPORT FUNCTION
+-- ============================================================
+
+local function findClosestPosition()
+    local hrp = S.LocalPlayer.Character and S.LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    
+    local closestDist = math.huge
+    local closestPos = nil
+    for _, v in ipairs(targetPositions) do
+        local dist = (hrp.Position - v).Magnitude
+        if dist < closestDist then
+            closestDist = dist
+            closestPos = v
         end
-        updateProgress(progress)
+    end
+    return closestPos and CFrame.new(closestPos) or nil
+end
 
-        if statsLabel then
-            statsLabel.Text = string.format("%d FPS | %dms | R:%d", currentFps, getPingMs(), CONFIG.PRIME_RANGE)
+local function performTeleport(pos1)
+    local character = S.LocalPlayer.Character
+    if not character then return end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    -- Calculate pos2 BEFORE first teleport (from original position where you're stealing from)
+    local pos2 = findClosestPosition()
+    
+    -- Double teleport bypass (exactly like leak script - simple and fast)
+    if pos1 then hrp.CFrame = pos1 end
+    if pos2 then task.wait(0.05); hrp.CFrame = pos2 end
+end
+
+-- ============================================================
+-- PROXIMITY PROMPT DETECTION
+-- ============================================================
+
+local promptConnection = nil
+
+local function equipCarpet()
+    -- Carpet equip logic (exactly like leak script)
+    local backpack = S.LocalPlayer:FindFirstChild("Backpack")
+    if backpack then
+        local carpet = backpack:FindFirstChild("Flying Carpet")
+        if carpet and S.LocalPlayer.Character and S.LocalPlayer.Character:FindFirstChild("Humanoid") then
+            S.LocalPlayer.Character.Humanoid:EquipTool(carpet)
+        end
+    end
+end
+
+local function enablePromptDetection()
+    if promptConnection then return end
+    
+    -- TP when hold ends (exactly like leak script)
+    promptConnection = S.ProximityPromptService.PromptButtonHoldEnded:Connect(function(prompt, who)
+        if who ~= S.LocalPlayer then return end
+        if prompt.Name ~= "Steal" and prompt.ActionText ~= "Steal" then return end
+        if not CONFIG.ENABLED then return end
+        
+        local hrp = S.LocalPlayer.Character and S.LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        
+        -- Equip carpet (exactly like leak script - inside PromptButtonHoldEnded)
+        equipCarpet()
+        
+        -- Perform teleport with exact bypass logic (pos1 = saved position, pos2 = closest hardcoded)
+        performTeleport(CONFIG.SAVED_POSITION)
+    end)
+end
+
+local function disablePromptDetection()
+    if promptConnection then
+        promptConnection:Disconnect()
+        promptConnection = nil
+    end
+end
+
+-- ============================================================
+-- GUI CREATION
+-- ============================================================
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "KawatanInstantTP"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = S.PlayerGui
+
+local mainFrame = nil
+local isDragging = false
+local dragStart = nil
+local dragStartPos = nil
+
+local function createGUI()
+    if mainFrame then
+        mainFrame:Destroy()
+    end
+    
+    local isMobile = S.UserInputService.TouchEnabled and not S.UserInputService.KeyboardEnabled
+    local containerWidth = isMobile and 200 or 230
+    local COLLAPSED_HEIGHT = 38
+    local EXPANDED_HEIGHT = isMobile and 110 or 130
+    local containerHeight = CONFIG.GUI_COLLAPSED and COLLAPSED_HEIGHT or EXPANDED_HEIGHT
+    
+    mainFrame = Instance.new("Frame")
+    mainFrame.Name = "MainFrame"
+    mainFrame.Size = UDim2.new(0, containerWidth, 0, containerHeight)
+    
+    if CONFIG.GUI_POSITION_X and CONFIG.GUI_POSITION_Y then
+        mainFrame.Position = UDim2.new(0, CONFIG.GUI_POSITION_X, 0, CONFIG.GUI_POSITION_Y)
+        mainFrame.AnchorPoint = Vector2.new(0, 0)
+    else
+        mainFrame.Position = UDim2.new(0.5, 0, 0, 150)
+        mainFrame.AnchorPoint = Vector2.new(0.5, 0)
+    end
+    
+    mainFrame.BackgroundColor3 = COLORS.Surface
+    mainFrame.BackgroundTransparency = 0.1
+    mainFrame.BorderSizePixel = 0
+    mainFrame.ZIndex = 999
+    mainFrame.Parent = screenGui
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = mainFrame
+    
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = COLORS.Accent
+    stroke.Thickness = 1.5
+    stroke.Transparency = 0.5
+    stroke.Parent = mainFrame
+    
+    local padding = Instance.new("UIPadding")
+    padding.PaddingLeft = UDim.new(0, 8)
+    padding.PaddingRight = UDim.new(0, 8)
+    padding.PaddingTop = UDim.new(0, 8)
+    padding.PaddingBottom = UDim.new(0, 8)
+    padding.Parent = mainFrame
+    
+    -- Header
+    local header = Instance.new("Frame")
+    header.Name = "Header"
+    header.Size = UDim2.new(1, 0, 0, 18)
+    header.Position = UDim2.new(0, 0, 0, 0)
+    header.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+    header.BackgroundTransparency = 0.9
+    header.BorderSizePixel = 0
+    header.ZIndex = 1000
+    header.Parent = mainFrame
+    
+    local headerGradient = Instance.new("UIGradient")
+    headerGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 120, 255)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 80, 200))
+    })
+    headerGradient.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.9),
+        NumberSequenceKeypoint.new(1, 0.9)
+    })
+    headerGradient.Parent = header
+    
+    -- Collapse button
+    local collapseBtn = Instance.new("TextButton")
+    collapseBtn.Name = "CollapseBtn"
+    collapseBtn.Size = UDim2.new(0, 28, 0, 18)
+    collapseBtn.Position = UDim2.new(0, 0, 0, 0)
+    collapseBtn.BackgroundTransparency = 1
+    collapseBtn.Text = CONFIG.GUI_COLLAPSED and "▲" or "▼"
+    collapseBtn.TextColor3 = Color3.fromRGB(107, 155, 199)
+    collapseBtn.TextSize = 18
+    collapseBtn.Font = Enum.Font.GothamBold
+    collapseBtn.ZIndex = 1003
+    collapseBtn.Parent = header
+    
+    collapseBtn.MouseButton1Click:Connect(function()
+        CONFIG.GUI_COLLAPSED = not CONFIG.GUI_COLLAPSED
+        collapseBtn.Text = CONFIG.GUI_COLLAPSED and "▲" or "▼"
+        saveConfig()
+        
+        -- Smooth collapse animation (like NO_TOOL_DESYNC and PVP scripts)
+        local targetHeight = CONFIG.GUI_COLLAPSED and COLLAPSED_HEIGHT or EXPANDED_HEIGHT
+        local contentWrapper = mainFrame:FindFirstChild("ContentWrapper")
+        
+        -- Animate size change
+        local collapseTween = S.TweenService:Create(
+            mainFrame,
+            TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            {Size = UDim2.new(0, containerWidth, 0, targetHeight)}
+        )
+        collapseTween:Play()
+        
+        -- Toggle content visibility
+        if contentWrapper then
+            contentWrapper.Visible = not CONFIG.GUI_COLLAPSED
+        end
+    end)
+    
+    -- Title
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -75, 1, 0)
+    title.Position = UDim2.new(0, 30, 0, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "Instant TP"
+    title.TextColor3 = COLORS.Accent
+    title.TextSize = 11
+    title.Font = Enum.Font.GothamBold
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.ZIndex = 1001
+    title.Parent = header
+    
+    -- Drag handle
+    local dragHandle = Instance.new("TextButton")
+    dragHandle.Size = UDim2.new(1, -28, 1, 0)
+    dragHandle.Position = UDim2.new(0, 28, 0, 0)
+    dragHandle.BackgroundTransparency = 1
+    dragHandle.Text = ""
+    dragHandle.ZIndex = 1002
+    dragHandle.Parent = header
+    
+    -- Drag functionality
+    local function startDrag(input)
+        isDragging = true
+        dragStart = input.Position
+        dragStartPos = mainFrame.Position
+    end
+    
+    local function updateDrag(input)
+        if not isDragging then return end
+        local delta = input.Position - dragStart
+        local newPos = UDim2.new(
+            dragStartPos.X.Scale,
+            dragStartPos.X.Offset + delta.X,
+            dragStartPos.Y.Scale,
+            dragStartPos.Y.Offset + delta.Y
+        )
+        mainFrame.Position = newPos
+        CONFIG.GUI_POSITION_X = newPos.X.Offset
+        CONFIG.GUI_POSITION_Y = newPos.Y.Offset
+    end
+    
+    local function endDrag()
+        if isDragging then
+            isDragging = false
+            saveConfig()
+        end
+    end
+    
+    dragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            startDrag(input)
+        end
+    end)
+    
+    S.UserInputService.InputChanged:Connect(function(input)
+        if isDragging then
+            updateDrag(input)
+        end
+    end)
+    
+    S.UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            endDrag()
+        end
+    end)
+    
+    -- Content wrapper
+    local contentWrapper = Instance.new("Frame")
+    contentWrapper.Name = "ContentWrapper"
+    contentWrapper.Size = UDim2.new(1, 0, 1, -18)
+    contentWrapper.Position = UDim2.new(0, 0, 0, 18)
+    contentWrapper.BackgroundTransparency = 1
+    contentWrapper.ClipsDescendants = true
+    contentWrapper.Visible = not CONFIG.GUI_COLLAPSED
+    contentWrapper.Parent = mainFrame
+    
+    -- Enable button
+    local enableBtn = Instance.new("TextButton")
+    enableBtn.Name = "EnableBtn"
+    enableBtn.Size = UDim2.new(1, 0, 0, 30)
+    enableBtn.Position = UDim2.new(0, 0, 0, 0)
+    enableBtn.BackgroundColor3 = CONFIG.ENABLED and COLORS.Success or COLORS.Accent
+    enableBtn.BackgroundTransparency = 0.88
+    enableBtn.BorderSizePixel = 0
+    enableBtn.Text = CONFIG.ENABLED and "Instant TP: ON" or "Instant TP: OFF"
+    enableBtn.TextColor3 = CONFIG.ENABLED and Color3.fromRGB(80, 200, 80) or Color3.fromRGB(0, 180, 255)
+    enableBtn.TextSize = 10
+    enableBtn.Font = Enum.Font.GothamBold
+    enableBtn.ZIndex = 1001
+    enableBtn.Parent = contentWrapper
+    
+    local enableCorner = Instance.new("UICorner")
+    enableCorner.CornerRadius = UDim.new(0, 6)
+    enableCorner.Parent = enableBtn
+    
+    local enableStroke = Instance.new("UIStroke")
+    enableStroke.Color = CONFIG.ENABLED and COLORS.Success or COLORS.Accent
+    enableStroke.Thickness = 1
+    enableStroke.Transparency = 0.75
+    enableStroke.Parent = enableBtn
+    
+    enableBtn.MouseButton1Click:Connect(function()
+        CONFIG.ENABLED = not CONFIG.ENABLED
+        saveConfig()
+        
+        if CONFIG.ENABLED then
+            enableBtn.Text = "Instant TP: ON"
+            enableBtn.BackgroundColor3 = COLORS.Success
+            enableBtn.TextColor3 = Color3.fromRGB(80, 200, 80)
+            enableStroke.Color = COLORS.Success
+            enablePromptDetection()
+            updateVisuals()
+        else
+            enableBtn.Text = "Instant TP: OFF"
+            enableBtn.BackgroundColor3 = COLORS.Accent
+            enableBtn.TextColor3 = Color3.fromRGB(0, 180, 255)
+            enableStroke.Color = COLORS.Accent
+            disablePromptDetection()
+            destroyBeam()
+            destroyIndicator()
+        end
+    end)
+    
+    -- Save Position button
+    local savePosBtn = Instance.new("TextButton")
+    savePosBtn.Name = "SavePosBtn"
+    savePosBtn.Size = UDim2.new(1, 0, 0, 30)
+    savePosBtn.Position = UDim2.new(0, 0, 0, 40)
+    savePosBtn.BackgroundColor3 = COLORS.Accent
+    savePosBtn.BackgroundTransparency = 0.88
+    savePosBtn.BorderSizePixel = 0
+    savePosBtn.Text = "Save Position"
+    savePosBtn.TextColor3 = Color3.fromRGB(0, 180, 255)
+    savePosBtn.TextSize = 10
+    savePosBtn.Font = Enum.Font.GothamBold
+    savePosBtn.ZIndex = 1001
+    savePosBtn.Parent = contentWrapper
+    
+    local savePosCorner = Instance.new("UICorner")
+    savePosCorner.CornerRadius = UDim.new(0, 6)
+    savePosCorner.Parent = savePosBtn
+    
+    local savePosStroke = Instance.new("UIStroke")
+    savePosStroke.Color = COLORS.Accent
+    savePosStroke.Thickness = 1
+    savePosStroke.Transparency = 0.75
+    savePosStroke.Parent = savePosBtn
+    
+    savePosBtn.MouseButton1Click:Connect(function()
+        local character = S.LocalPlayer.Character
+        if character then
+            local hrp = character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                CONFIG.SAVED_POSITION = hrp.CFrame
+                saveConfig()
+                updateVisuals()
+            end
         end
     end)
 end
 
--- ==================== INITIALISATION ====================
-buildPillUI()
-startUIUpdater()
+-- ============================================================
+-- INITIALIZATION
+-- ============================================================
 
-task.spawn(function()
-    while task.wait(5) do scanAllPlots() end
+createGUI()
+
+if CONFIG.ENABLED then
+    enablePromptDetection()
+    updateVisuals()
+end
+
+-- Update visuals periodically
+S.RunService.Heartbeat:Connect(function()
+    if CONFIG.ENABLED then
+        updateVisuals()
+    end
 end)
 
-scanAllPlots()
-if CONFIG.AUTO_STEAL_ENABLED then startAutoSteal() end
+-- Cleanup on respawn
+S.LocalPlayer.CharacterAdded:Connect(function()
+    -- Destroy old beam and indicators (they're attached to old character)
+    destroyBeam()
+    destroyIndicator()
+    
+    task.wait(0.5)
+    if CONFIG.ENABLED then
+        updateVisuals()
+    end
+end)
